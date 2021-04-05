@@ -1,6 +1,7 @@
 package tcpdump
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -45,21 +46,62 @@ func Capture(filePath string, durationTime int) error {
 	packetSource := gopacket.NewPacketSource(pcapHandle, pcapHandle.LinkType())
 	//durationTimeInt, err := strconv.Atoi(durationTime)
 	end := time.After(time.Duration(durationTime) * time.Duration(time.Second))
-	for packet := range packetSource.Packets() {
+	log.Info(fmt.Sprintf("Start capturing of %s", filePath))
+	/*
+		for {
+			select {
+			case <-end:
+				if err != nil {
+					log.Warn("There was error while writing the packet: %q", err)
+					return err
+				}
+				log.Info("break")
+				goto end
+			default:
+				log.Info("working on the capture_1")
+				for packet := range packetSource.Packets() {
+					log.Info("working on the capture_3")
+
+					if packet != nil {
+						err = writer.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+						if err != nil {
+							log.Warn("Failed to write the packet due to: %q", err)
+						}
+					} else {
+						continue
+					}
+				}
+				log.Info("working on the capture_2")
+			}
+		}
+	*/
+
+	for {
 		select {
+		case <-packetSource.Packets():
+			for packet := range packetSource.Packets() {
+				select {
+				case <-end:
+					goto final
+				default:
+					err = writer.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+					if err != nil {
+						log.Warn("Failed to write the packet due to: %q", err)
+					}
+				}
+			}
+			//goto final
 		case <-end:
 			if err != nil {
 				log.Warn("There was error while writing the packet: %q", err)
 				return err
 			}
-			return nil
-
+			goto final
 		default:
-			err = writer.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
-			if err != nil {
-				log.Warn("Failed to write the packet due to: %q", err)
-			}
+			continue
 		}
 	}
+final:
+	log.Info(fmt.Sprintf("Complete the capturing of %s", filePath))
 	return nil
 }

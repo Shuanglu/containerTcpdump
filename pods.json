@@ -1,0 +1,18 @@
+{
+    "Runtime": "containerd",
+    "Duration": 50,
+    "Pods": [
+        {
+            "UID": "7848dbb3-9b36-4b4f-9033-62a4be23c05b",
+	    "Name": "test1_nginx-deployment-d46f5678b-gqlq6"
+        },
+	{
+	    "UID": "fdd609f0-650d-4373-b396-691393890e37",
+	    "Name": "kube-system_coredns-748cdb7bf4-45v52"
+	},
+	{
+	    "UID": "16105b3a-5168-42bc-9ceb-2d52d635e67b",
+	    "Name": "kube-system_kube-proxy-pw5w8"
+	}
+    ]
+}
