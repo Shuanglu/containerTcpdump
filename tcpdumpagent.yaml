@@ -6,7 +6,7 @@ metadata:
   name: dumpagent
 spec:
   containers:
-  - image: shawnlu/dumpagent:0.1
+  - image: shawnlu/tcpdumpagent:0.1
     imagePullPolicy: Always
     name: nsenter
     securityContext:
