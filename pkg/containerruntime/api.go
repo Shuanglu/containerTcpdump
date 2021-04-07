@@ -5,6 +5,6 @@ package containerruntime
 type ContainerRuntime interface {
 	//RuntimeClientInit(addr string) (pb.RuntimeServiceClient, error)
 	GetPodSandboxId(UID string) (string, error)
-	GetPodSandboxStatusInfo(id string) (map[string]string, error)
-	GetPodSandboxNetworkNamespace(podSandboxStatusInfo map[string]string) (string, error)
+	GetPodSandboxStatusInfo(id string) (interface{}, error)
+	GetPodSandboxNetworkNamespace(podSandboxStatusInfo interface{}) (string, error)
 }

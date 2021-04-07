@@ -167,9 +167,13 @@ func (r *ContainerdRuntime) RetrievePID(UID string) (string, error) {
 */
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Shuanglu/containerTcpdump/pkg/containerruntime"
+	//"github.com/containerd/containerd/log"
+	log "github.com/sirupsen/logrus"
 	gojsonq "github.com/thedevsaddam/gojsonq/v2"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -183,22 +187,22 @@ const (
 	defaultTimeout = 2 * time.Second
 )
 
-type RuntimeClient struct {
+type ContainerdRuntimeClient struct {
 	runtimeClient pb.RuntimeServiceClient
 }
 
-func RuntimeClientInit(addr string) (containerruntime.ContainerRuntime, error) {
+func ContainerdRuntimeClientInit(addr string) (containerruntime.ContainerRuntime, error) {
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(defaultTimeout))
 	if err != nil {
 		return nil, err
 	}
-	return &RuntimeClient{
+	return &ContainerdRuntimeClient{
 		runtimeClient: pb.NewRuntimeServiceClient(conn),
 	}, nil
 }
 
-func (rc *RuntimeClient) GetPodSandboxId(UID string) (string, error) {
-	var id string
+func (rc *ContainerdRuntimeClient) GetPodSandboxId(UID string) (string, error) {
+	var podSandboxID string
 	listPodSandboxRequest := pb.ListPodSandboxRequest{
 		Filter: &pb.PodSandboxFilter{
 			State: &pb.PodSandboxStateValue{
@@ -212,15 +216,21 @@ func (rc *RuntimeClient) GetPodSandboxId(UID string) (string, error) {
 		return "", err
 	}
 	for _, podSandbox := range podSandboxList.GetItems() {
+		log.Info(fmt.Sprintf("ID: %s", podSandbox))
 		if podSandbox.Metadata.Uid == UID {
-			id = podSandbox.Id
+			podSandboxID = podSandbox.Id
+			log.Info(fmt.Sprintf("Sandbox: %s", podSandbox))
 			break
 		}
 	}
-	return id, nil
+	if podSandboxID == "" {
+		err := errors.New("No matching Sandbox ID found")
+		return podSandboxID, err
+	}
+	return podSandboxID, nil
 }
 
-func (rc *RuntimeClient) GetPodSandboxStatusInfo(id string) (map[string]string, error) {
+func (rc *ContainerdRuntimeClient) GetPodSandboxStatusInfo(id string) (interface{}, error) {
 	podSandboxStatusRequest := pb.PodSandboxStatusRequest{
 		PodSandboxId: id,
 		Verbose:      true,
@@ -232,9 +242,10 @@ func (rc *RuntimeClient) GetPodSandboxStatusInfo(id string) (map[string]string, 
 	return podSandboxStatusResponse.GetInfo(), nil
 }
 
-func (rc *RuntimeClient) GetPodSandboxNetworkNamespace(podSandboxStatusInfo map[string]string) (string, error) {
+func (rc *ContainerdRuntimeClient) GetPodSandboxNetworkNamespace(podSandboxStatusInfo interface{}) (string, error) {
 	var netNamespacePath string
-	namespaces := gojsonq.New().FromString(podSandboxStatusInfo["info"]).Find("runtimeSpec.linux.namespaces")
+	info := podSandboxStatusInfo.(map[string]string)
+	namespaces := gojsonq.New().FromString(info["info"]).Find("runtimeSpec.linux.namespaces")
 	for _, namespace := range namespaces.([]interface{}) {
 		namespaceMap := namespace.(map[string]interface{})
 		if namespaceMap["type"].(string) == "network" {
