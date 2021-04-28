@@ -30,20 +30,17 @@ const (
 	bindMountPath = "/run/netns" /* Bind mount path for named netns */
 )
 
-type containerOperation interface {
-	RetrieveNetns(UID string) (string, error)
-}
-
 type targetPod struct {
-	UID  string `json:"UID"`
-	Name string `json:"Name"`
+	Name      string `json:"Name"`
+	Namespace string `json:"Namespace"`
+	Uid       string `json:"Uid",omitempty`
 }
 
 type targetPods struct {
-	Pods            []targetPod `json:"Pods"`
-	Runtime         string      `json:"Runtime,omitempty"`
-	RuntimeEndpoint string      `json:"RuntimeEndpoint,omitempty"`
-	Duration        int         `json:"Duration"`
+	Pods            []targetPod       `json:"Pods"`
+	Runtime         string            `json:"Runtime,omitempty"`
+	RuntimeEndpoint map[string]string `json:"RuntimeEndpoint,omitempty"`
+	Duration        int               `json:"Duration"`
 }
 
 func tcpdump(workerGroup *sync.WaitGroup, podNetns string, podId string, duration int) error {
@@ -180,19 +177,19 @@ func main() {
 		runtime = "containerd"
 	}
 	if runtime == "containerd" {
-		switch podsJson.RuntimeEndpoint {
+		switch podsJson.RuntimeEndpoint["containerd"] {
 		case "":
 			runtimeEndpoint = "unix:///run/containerd/containerd.sock"
 		default:
-			runtimeEndpoint = podsJson.RuntimeEndpoint
+			runtimeEndpoint = podsJson.RuntimeEndpoint["containerd"]
 		}
 	}
 	if runtime == "docker" {
-		switch podsJson.RuntimeEndpoint {
+		switch podsJson.RuntimeEndpoint["docker"] {
 		case "":
 			runtimeEndpoint = "unix:///var/run/dockershim.sock"
 		default:
-			runtimeEndpoint = podsJson.RuntimeEndpoint
+			runtimeEndpoint = podsJson.RuntimeEndpoint["docker"]
 		}
 	}
 	if runtime != "containerd" && runtime != "docker" {
@@ -211,7 +208,7 @@ func main() {
 			log.Fatal(fmt.Sprintf("Failed to initialize the connection of %s due to: %s", runtime, err))
 		}
 		for _, tContainer := range tContainers {
-			tContainerSandboxID, err := dockerClient.GetPodSandboxId(tContainer.UID)
+			tContainerSandboxID, err := dockerClient.GetPodSandboxId(tContainer.Uid)
 			if err != nil {
 				hostname, _ := os.Hostname()
 				log.Warn(fmt.Sprintf("Failed to list the pod sandbox on the %s: %s", hostname, err))
@@ -228,7 +225,7 @@ func main() {
 			if err != nil {
 				log.Warn(fmt.Sprintf("Failed to get the network namespace path of the pod %s: %s", tContainer.Name, err))
 			}
-			PodMap[tContainer.UID] = tContainerNetns
+			PodMap[tContainer.Uid] = tContainerNetns
 		}
 	case "containerd":
 		containerdClient, err := containerdtcpdump.ContainerdRuntimeClientInit(runtimeEndpoint)
@@ -236,7 +233,7 @@ func main() {
 			log.Fatal(fmt.Sprintf("Failed to initialize the connection of %s due to: %s", runtime, err))
 		}
 		for _, tContainer := range tContainers {
-			tContainerSandboxID, err := containerdClient.GetPodSandboxId(tContainer.UID)
+			tContainerSandboxID, err := containerdClient.GetPodSandboxId(tContainer.Uid)
 			if err != nil {
 				hostname, _ := os.Hostname()
 				log.Warn(fmt.Sprintf("Failed to list the pod sandbox on the %s: %s", hostname, err))
@@ -253,7 +250,7 @@ func main() {
 			if err != nil {
 				log.Warn(fmt.Sprintf("Failed to get the network namespace path of the pod %s: %s", tContainer.Name, err))
 			}
-			PodMap[tContainer.UID] = tContainerNetns
+			PodMap[tContainer.Uid] = tContainerNetns
 		}
 	default:
 		log.Fatal(fmt.Sprintf("Not supported runtime: %q", runtime))
@@ -272,7 +269,7 @@ func main() {
 		log.Fatal("Failed to retrieve PIDs of all the containers")
 	}
 	log.Info("Complete")
-	cmd := exec.Command("touch", "/tmp/containerTcpdumpComplete")
+	cmd := exec.Command("touch", "/tmp/tcpdumpAgentComplete")
 	cmd.Run()
 
 }
