@@ -184,7 +184,7 @@ const (
 	//dockerep       = "unix:///var/run/dockershim.sock"
 	containerdep = "unix:///run/containerd/containerd.sock"
 	//crioep         = "unix:///run/crio/crio.sock"
-	defaultTimeout = 2 * time.Second
+	defaultTimeout = 5 * time.Second
 )
 
 type ContainerdRuntimeClient struct {
@@ -192,7 +192,7 @@ type ContainerdRuntimeClient struct {
 }
 
 func ContainerdRuntimeClientInit(addr string) (containerruntime.ContainerRuntime, error) {
-	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(defaultTimeout))
+	conn, err := grpc.Dial("unix://"+addr, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(defaultTimeout), grpc.WithReturnConnectionError())
 	if err != nil {
 		return nil, err
 	}

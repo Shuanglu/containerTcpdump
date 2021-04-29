@@ -37,13 +37,18 @@ type targetPod struct {
 }
 
 type targetPods struct {
-	Pods            []targetPod       `json:"Pods"`
-	Runtime         string            `json:"Runtime,omitempty"`
-	RuntimeEndpoint map[string]string `json:"RuntimeEndpoint,omitempty"`
-	Duration        int               `json:"Duration"`
+	Pods            []targetPod `json:"Pods"`
+	Runtime         string      `json:"Runtime"`
+	RuntimeEndpoint string      `json:"RuntimeEndpoint"`
+	Duration        int         `json:"Duration"`
 }
 
-func tcpdump(workerGroup *sync.WaitGroup, podNetns string, podId string, duration int) error {
+type captureInfo struct {
+	NetNamespace string `json:"NetNamespace"`
+	Path         string `json:"Path"`
+}
+
+func tcpdump(workerGroup *sync.WaitGroup, captureinfo captureInfo, duration int, ch chan error) error {
 	defer workerGroup.Done()
 	//runtime.LockOSThread()
 	//defer runtime.UnlockOSThread()
@@ -51,6 +56,7 @@ func tcpdump(workerGroup *sync.WaitGroup, podNetns string, podId string, duratio
 	//tContainerJson.State.Pid
 	//nsHandle, _ := netns.GetFromPid(containerPid)
 	//log.Info(fmt.Sprintf("%s", podNetns))
+	podNetns := captureinfo.NetNamespace
 	podNetns = strings.TrimSuffix(podNetns, "\n")
 	podNetns = strings.TrimSuffix(podNetns, "\"")
 	podNetns = strings.TrimPrefix(podNetns, "\"")
@@ -58,18 +64,25 @@ func tcpdump(workerGroup *sync.WaitGroup, podNetns string, podId string, duratio
 	if podNetns != "" {
 		nsHandle, err := netns.GetFromPath(podNetns)
 		if err != nil {
-			log.Warn(fmt.Sprintf("Failed to get ns handle for pod %q due to %q", podId, err))
+			ch <- fmt.Errorf("Failed to get ns handle for pod %q due to %q", captureinfo.Path, err)
+			//log.Warn(fmt.Sprintf("Failed to get ns handle for pod %q due to %q", captureinfo.Path, err)
 			return err
 		}
-		netns.Set(nsHandle)
+		err = netns.Set(nsHandle)
+		if err != nil {
+			ch <- fmt.Errorf("Failed to set ns handle for pod %q due to %q", captureinfo.Path, err)
+			return err
+		}
 		log.Info(fmt.Sprintf("Entering the network namespace: %q", podNetns))
 
 	}
-	path := "/tmp/" + podId + ".cap"
+	path := "/tmp/tcpdumpagent/" + captureinfo.Path + ".cap"
 	err := gopacket.Capture(path, duration)
 	if err != nil {
-		log.Warn("There was error while capturing the requests of pod %q", podId)
+		ch <- fmt.Errorf("There was error while capturing the requests of pod %q", captureinfo.Path)
+		return err
 	}
+	ch <- nil
 	return nil
 }
 
@@ -171,27 +184,9 @@ func main() {
 		log.Fatal(fmt.Sprintf("Failed to parse the Json file: %s", err))
 	}
 	tContainers := podsJson.Pods
-	if podsJson.Runtime != "" {
-		runtime = podsJson.Runtime
-	} else {
-		runtime = "containerd"
-	}
-	if runtime == "containerd" {
-		switch podsJson.RuntimeEndpoint["containerd"] {
-		case "":
-			runtimeEndpoint = "unix:///run/containerd/containerd.sock"
-		default:
-			runtimeEndpoint = podsJson.RuntimeEndpoint["containerd"]
-		}
-	}
-	if runtime == "docker" {
-		switch podsJson.RuntimeEndpoint["docker"] {
-		case "":
-			runtimeEndpoint = "unix:///var/run/dockershim.sock"
-		default:
-			runtimeEndpoint = podsJson.RuntimeEndpoint["docker"]
-		}
-	}
+	runtime = podsJson.Runtime
+	runtimeEndpoint = podsJson.RuntimeEndpoint
+
 	if runtime != "containerd" && runtime != "docker" {
 		log.Fatal(fmt.Sprintf("The input runtime %s is not supported", runtime))
 	}
@@ -200,7 +195,9 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to parse the 'duration' from the config file: %s", err)
 	}*/
-	PodMap := make(map[string]string)
+
+	PodMap := make(map[string]captureInfo)
+	log.Info(fmt.Sprintf("runtimeEndpoint: %s", runtimeEndpoint))
 	switch runtime {
 	case "docker":
 		dockerClient, err := dockertcpdump.DockerRuntimeClientInit(runtimeEndpoint)
@@ -225,7 +222,10 @@ func main() {
 			if err != nil {
 				log.Warn(fmt.Sprintf("Failed to get the network namespace path of the pod %s: %s", tContainer.Name, err))
 			}
-			PodMap[tContainer.Uid] = tContainerNetns
+			PodMap[tContainer.Uid] = captureInfo{
+				NetNamespace: tContainerNetns,
+				Path:         tContainer.Namespace + "-" + tContainer.Name,
+			}
 		}
 	case "containerd":
 		containerdClient, err := containerdtcpdump.ContainerdRuntimeClientInit(runtimeEndpoint)
@@ -250,26 +250,48 @@ func main() {
 			if err != nil {
 				log.Warn(fmt.Sprintf("Failed to get the network namespace path of the pod %s: %s", tContainer.Name, err))
 			}
-			PodMap[tContainer.Uid] = tContainerNetns
+			PodMap[tContainer.Uid] = captureInfo{
+				NetNamespace: tContainerNetns,
+				Path:         tContainer.Namespace + "-" + tContainer.Name,
+			}
 		}
 	default:
 		log.Fatal(fmt.Sprintf("Not supported runtime: %q", runtime))
 	}
 	log.Info(fmt.Sprintf("%s", PodMap))
-
+	ch := make(chan error, len(PodMap))
 	if len(PodMap) > 0 {
+		err := os.Mkdir("/tmp/tcpdumpagent", 0755)
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Failed to create the folder 'tcpdumpagent': %s", err))
+		}
 		var workerGroup sync.WaitGroup
-		for podId, podNetns := range PodMap {
+
+		for _, captureinfo := range PodMap {
 			workerGroup.Add(1)
-			log.Info(fmt.Sprintf("network namespace: %q", podNetns))
-			go tcpdump(&workerGroup, podNetns, podId, duration)
+			log.Info(fmt.Sprintf("network namespace of pod %s is: %q", captureinfo.Path, captureinfo.NetNamespace))
+			go tcpdump(&workerGroup, captureinfo, duration, ch)
 		}
 		workerGroup.Wait()
 	} else {
 		log.Fatal("Failed to retrieve PIDs of all the containers")
 	}
 	log.Info("Complete")
-	cmd := exec.Command("touch", "/tmp/tcpdumpAgentComplete")
-	cmd.Run()
-
+	complete := 0
+	//log.Info(len(PodMap))
+	for i := 0; i < len(PodMap); i++ {
+		err := <-ch
+		if err != nil {
+			log.Warn(err)
+		} else {
+			complete = complete + 1
+		}
+		//log.Info(strconv.Itoa(complete))
+	}
+	if complete == len(PodMap) {
+		cmd := exec.Command("touch", "/tmp/tcpdumpAgentComplete")
+		cmd.Run()
+	} else {
+		log.Warn("There is error during the network capture. Please check the logs")
+	}
 }
